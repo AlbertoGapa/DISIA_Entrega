@@ -1,0 +1,33 @@
+=========================================
+REPORTE EDA - PROYECTO VITIS-IA
+=========================================
+
+1. DIMENSIONES DEL DATASET CONSOLIDADO
+Total de filas: 1006
+Total de columnas: 7
+
+2. VALORES NULOS POR COLUMNA
+Unnamed: 0                0
+Date                      0
+Brix                      0
+Total acidity (g/l TA)    0
+pH                        0
+Maturity percentage       0
+Variedad                  0
+
+3. ESTADÍSTICAS DESCRIPTIVAS GLOBALES
+              Date         Brix  Total acidity (g/l TA)  Maturity percentage
+count  1006.000000  1006.000000             1006.000000          1006.000000
+mean      3.573559    17.366203               10.248668            63.061630
+std       1.642125     3.432559                4.386542            25.784607
+min       1.000000     9.100000                3.600000            20.000000
+25%       2.000000    14.700000                6.925000            40.000000
+50%       4.000000    18.000000                9.300000            70.000000
+75%       5.000000    19.700000               11.850000            80.000000
+max       6.000000    26.400000               24.600000           100.000000
+
+4. MEDIAS DE AZÚCAR POR VARIEDAD
+Variedad
+Sauvignon Blanc    16.160417
+Syrah              19.421176
+Xinomavro          17.294788
