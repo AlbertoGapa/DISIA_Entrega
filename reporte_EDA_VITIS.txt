@@ -2,6 +2,7 @@
 REPORTE EDA - PROYECTO VITIS-IA
 =========================================
 
+--- DATOS DE MADURACIÓN (UVAS) ---
 1. DIMENSIONES DEL DATASET CONSOLIDADO
 Total de filas: 1006
 Total de columnas: 7
@@ -31,3 +32,31 @@ Variedad
 Sauvignon Blanc    16.160417
 Syrah              19.421176
 Xinomavro          17.294788
+
+=========================================
+--- DATOS DE FITOSANIDAD (ROSALES) ---
+Total de filas: 1200 | Columnas: 14
+
+VALORES NULOS POR COLUMNA
+Timestamp                 0
+Plant_ID                  0
+Soil_Moisture             0
+Ambient_Temperature       0
+Soil_Temperature          0
+Humidity                  0
+Light_Intensity           0
+Soil_pH                   0
+Nitrogen_Level            0
+Phosphorus_Level          0
+Potassium_Level           0
+Chlorophyll_Content       0
+Electrochemical_Signal    0
+Plant_Health_Status       0
+
+DESBALANCEO DE CLASES (VARIABLE OBJETIVO)
+Proporción de días sanos vs con plaga (justifica el uso de F1-Score):
+Plant_Health_Status
+High Stress        41.67%
+Moderate Stress    33.42%
+Healthy            24.92%
+

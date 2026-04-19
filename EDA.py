@@ -11,9 +11,9 @@ try:
     df_xino = pd.read_excel('grape-maturity-dataset.xlsx', sheet_name='Xinomavro')
     df_syrah = pd.read_excel('grape-maturity-dataset.xlsx', sheet_name='Syrah')
     df_sauv = pd.read_excel('grape-maturity-dataset.xlsx', sheet_name='Sauvignon Blanc')
-    print("Archivos CSV cargados correctamente.")
+    print("Archivos Excel de uvas cargados correctamente.")
 except FileNotFoundError as e:
-    print(f"Error al cargar los archivos: {e}. Asegúrate de que están en la misma carpeta que el script.")
+    print(f"Error al cargar excel de uvas: {e}. Asegúrate de que están en la misma carpeta.")
     exit()
 
 # Añadir la columna de variedad
@@ -21,11 +21,16 @@ df_xino['Variedad'] = 'Xinomavro'
 df_syrah['Variedad'] = 'Syrah'
 df_sauv['Variedad'] = 'Sauvignon Blanc'
 
-# Unir todo en un solo DataFrame
+# Unir todo en un solo DataFrame de uvas
 df = pd.concat([df_xino, df_syrah, df_sauv], ignore_index=True)
 
-# (Nota: Si tu columna de azúcar se llama distinto a 'Brix', por ejemplo 'TSS', 
-# cambia la palabra 'Brix' en las siguientes líneas por tu nombre real de columna)
+try:
+    df_rosales = pd.read_csv('plant_health_data.csv')
+    print("Archivo CSV de rosales cargado correctamente.")
+except FileNotFoundError:
+    print("Aviso: No se encontró 'plant_health_data.csv'. Se omitirá esta parte.")
+    df_rosales = None
+
 
 # 2. GENERACIÓN DEL REPORTE EN TEXTO (.txt)
 nombre_reporte = 'reporte_EDA_VITIS.txt'
@@ -34,6 +39,7 @@ with open(nombre_reporte, 'w', encoding='utf-8') as f:
     f.write("REPORTE EDA - PROYECTO VITIS-IA\n")
     f.write("=========================================\n\n")
     
+    f.write("--- DATOS DE MADURACIÓN (UVAS) ---\n")
     f.write("1. DIMENSIONES DEL DATASET CONSOLIDADO\n")
     f.write(f"Total de filas: {df.shape[0]}\n")
     f.write(f"Total de columnas: {df.shape[1]}\n\n")
@@ -48,12 +54,26 @@ with open(nombre_reporte, 'w', encoding='utf-8') as f:
     col_azucar = 'Brix' # Cambia esto si en tu CSV se llama 'TSS' u otra cosa
     if col_azucar in df.columns:
         f.write("4. MEDIAS DE AZÚCAR POR VARIEDAD\n")
-        f.write(df.groupby('Variedad')[col_azucar].mean().to_string() + "\n")
+        f.write(df.groupby('Variedad')[col_azucar].mean().to_string() + "\n\n")
+
+    if df_rosales is not None and not df_rosales.empty:
+        f.write("=========================================\n")
+        f.write("--- DATOS DE FITOSANIDAD (ROSALES) ---\n")
+        f.write(f"Total de filas: {df_rosales.shape[0]} | Columnas: {df_rosales.shape[1]}\n\n")
+        
+        f.write("VALORES NULOS POR COLUMNA\n")
+        f.write(df_rosales.isnull().sum().to_string() + "\n\n")
+        
+        # Análisis de sesgo/desbalanceo de la clase
+        col_plaga = 'Plant_Health_Status' 
+        if col_plaga in df_rosales.columns:
+            f.write("DESBALANCEO DE CLASES (VARIABLE OBJETIVO)\n")
+            f.write("Proporción de días sanos vs con plaga (justifica el uso de F1-Score):\n")
+            f.write(df_rosales[col_plaga].value_counts(normalize=True).apply(lambda x: f"{x*100:.2f}%").to_string() + "\n\n")
 
 print(f"Reporte de texto generado y guardado como: {nombre_reporte}")
 
 # 3. GENERACIÓN Y GUARDADO DE GRÁFICOS (.png)
-# Configuramos Seaborn
 sns.set_theme(style="whitegrid")
 
 # Verificar que existen columnas numéricas para correlación
@@ -80,7 +100,6 @@ if col_azucar in df.columns:
     plt.close()
     print("Gráfico guardado: distribucion_variedad_vitis.png")
 
-# Opcional: Gráfico temporal si tienes una columna de fecha (cambia 'Date' por tu nombre real)
 col_fecha = 'Date' 
 if col_fecha in df.columns and col_azucar in df.columns:
     # Convertimos a datetime para graficar mejor
@@ -97,5 +116,29 @@ if col_fecha in df.columns and col_azucar in df.columns:
     plt.savefig('evolucion_temporal_vitis.png')
     plt.close()
     print("Gráfico guardado: evolucion_temporal_vitis.png")
+
+if df_rosales is not None and not df_rosales.empty:
+    col_plaga = 'Plant_Health_Status'
+    col_humedad = 'Humidity' 
+    
+    if col_plaga in df_rosales.columns:
+        # Gráfico de desbalanceo
+        plt.figure(figsize=(6, 4))
+        sns.countplot(data=df_rosales, x=col_plaga, palette='Reds', hue=col_plaga, legend=False)
+        plt.title('Desbalanceo de Clases: Días Sanos vs Plaga')
+        plt.tight_layout()
+        plt.savefig('desbalanceo_plagas_vitis.png')
+        plt.close()
+        print("Gráfico guardado: desbalanceo_plagas_vitis.png")
+        
+        # Gráfico de correlación Clima vs Plaga
+        if col_humedad in df_rosales.columns:
+            plt.figure(figsize=(8, 6))
+            sns.boxplot(x=col_plaga, y=col_humedad, data=df_rosales, palette='Blues', hue=col_plaga, legend=False)
+            plt.title('Influencia de la Humedad en la Aparición de Plagas')
+            plt.tight_layout()
+            plt.savefig('humedad_vs_plaga_vitis.png')
+            plt.close()
+            print("Gráfico guardado: humedad_vs_plaga_vitis.png")
 
 print("\n¡Proceso finalizado con éxito! Revisa la carpeta para ver tu reporte y tus gráficos.")
