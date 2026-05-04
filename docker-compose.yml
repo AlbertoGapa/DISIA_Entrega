@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  # Servicio 1: Contenedor de Entrenamiento
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    volumes:
+      - ./data:/app/data        # Mapea los excels locales al contenedor
+      - ./models:/app/models    # Aquí se guardarán los .pkl
+    container_name: vitis_trainer
+
+  # Servicio 2: Contenedor de Inferencia (API)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.infer
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+    env_file:             
+      - .env    
+    depends_on:
+      trainer:
+        condition: service_completed_successfully # Espera a que termine de entrenar
+    container_name: vitis_api

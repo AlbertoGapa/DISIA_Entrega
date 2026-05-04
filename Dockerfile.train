@@ -1,0 +1,12 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Instalar dependencias
+RUN pip install pandas numpy scikit-learn openpyxl joblib
+
+# Copiar el código fuente (los datos se montarán por volumen)
+COPY src/train.py /app/train.py
+
+# Ejecutar el entrenamiento al levantar el contenedor
+CMD ["python", "train.py"]

@@ -11,13 +11,12 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (mean_squared_error, f1_score, recall_score, 
                              confusion_matrix, ConfusionMatrixDisplay)
+import joblib
 
-# Ignorar warnings de versiones
+
 warnings.filterwarnings("ignore")
 
 print("Iniciando Pipeline de Modelado para VITIS-IA \n")
-
-# 1. CARGA Y PREPROCESADO DE DATOS REALES
 
 try:
     df_xino = pd.read_excel('grape-maturity-dataset.xlsx', sheet_name='Xinomavro')
@@ -36,12 +35,12 @@ except FileNotFoundError:
     exit()
 
 # Limpieza y selección de features para Uvas
-df_uvas = df_uvas.dropna(subset=['Brix'])
-# Usamos acidez, maduración y variedad para predecir los grados Brix
-features_uvas = ['Total acidity (g/l TA)', 'Maturity percentage', 'Variedad']
+df_uvas = df_uvas.dropna(subset=['Maturity percentage'])
+# Usamos acidez, brix y variedad para predecir la maduración
+features_uvas = ['Total acidity (g/l TA)', 'Brix', 'Variedad']
 X_reg = pd.get_dummies(df_uvas[features_uvas], drop_first=True)
 X_reg = X_reg.fillna(X_reg.mean()) 
-y_reg = df_uvas['Brix']
+y_reg = df_uvas['Maturity percentage']
 
 try:
     df_rosales = pd.read_csv('plant_health_data.csv')
@@ -66,7 +65,7 @@ X_clf = df_rosales.drop(columns=[col_target_plaga]).select_dtypes(include=[np.nu
 X_clf = X_clf.fillna(X_clf.mean())
 
 
-# 2: MODELADO DE PLAGAS (CLASIFICACIÓN)
+# MODELADO DE PLAGAS (CLASIFICACIÓN)
 
 print("--- ENTRENANDO MODELOS DE PLAGAS (CLASIFICACIÓN) ---")
 # Stratify asegura que la proporción de plagas se mantenga igual en train y test
@@ -113,9 +112,9 @@ plt.close()
 print("-> Gráfico guardado: matriz_confusion_plagas.png\n")
 
 
-# 3: MODELADO DE MADURACIÓN (REGRESIÓN)
+# MODELADO DE MADURACIÓN (REGRESIÓN)
 
-print("--- ENTRENANDO MODELOS DE MADURACIÓN (REGRESIÓN DE BRIX) ---")
+print("--- ENTRENANDO MODELOS DE MADURACIÓN (REGRESIÓN DE MATURITY) ---")
 X_train_r, X_test_r, y_train_r, y_test_r = train_test_split(X_reg, y_reg, test_size=0.2, random_state=42)
 
 # Baseline: Regresión Lineal
@@ -125,7 +124,7 @@ y_pred_r_base = reg_base.predict(X_test_r)
 
 print("Resultados Baseline (Regresión Lineal):")
 rmse_base = np.sqrt(mean_squared_error(y_test_r, y_pred_r_base))
-print(f"  RMSE: {rmse_base:.4f} Grados Brix")
+print(f"  RMSE: {rmse_base:.4f} % Maduración")
 
 # GridSearch: Random Forest Regressor
 rf_reg = RandomForestRegressor(random_state=42)
@@ -144,19 +143,19 @@ rmse_mej = np.sqrt(mean_squared_error(y_test_r, y_pred_r_mej))
 
 print("\nResultados Avanzados (Random Forest Optimizado vía GridSearch):")
 print(f"  Mejores Parámetros: {grid_reg.best_params_}")
-print(f"  RMSE: {rmse_mej:.4f} Grados Brix")
+print(f"  RMSE: {rmse_mej:.4f} % Maduración")
 
 # Gráfico de Dispersión (Real vs Predicho)
 plt.figure(figsize=(8, 6))
 plt.scatter(y_test_r, y_pred_r_mej, alpha=0.6, color='purple')
 plt.plot([y_test_r.min(), y_test_r.max()], [y_test_r.min(), y_test_r.max()], 'r--', lw=2) # Línea de perfección
-plt.title('Predicción de Maduración: Brix Real vs. Predicho')
-plt.xlabel('Grados Brix Reales (Laboratorio)')
-plt.ylabel('Grados Brix Predichos por el Modelo')
+plt.title('Predicción de Maduración: Real vs. Predicho')
+plt.xlabel('Porcentaje de Maduración Real (%)')
+plt.ylabel('Porcentaje de Maduración Predicho (%)')
 plt.tight_layout()
-plt.savefig('dispersion_brix.png')
+plt.savefig('dispersion_maturity.png')
 plt.close()
-print("-> Gráfico guardado: dispersion_brix.png")
+print("-> Gráfico guardado: dispersion_maturity.png")
 
 print("\n--- GENERANDO EXPLICABILIDAD (SHAP) PARA EL HITO 3 ---")
 # Generamos la explicación para el modelo de plagas (Random Forest)
@@ -174,3 +173,12 @@ plt.close()
 print("-> Gráfico guardado: shap_explicabilidad_plagas.png")
 
 print("\n¡Pipeline de Machine Learning finalizado con éxito!")
+
+# Guardar el modelo de clasificación de plagas
+joblib.dump(mejor_clf, 'modelo_plagas.pkl')
+print("Modelo de plagas guardado como modelo_plagas.pkl")
+
+# Guardar el modelo de regresión de maduración
+joblib.dump(mejor_reg, 'modelo_maturity.pkl')
+joblib.dump(list(X_reg.columns), 'columnas_maturity.pkl')
+print("Modelo de regresión guardado como modelo_maturity.pkl y columnas_maturity.pkl")

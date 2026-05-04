@@ -1,0 +1,14 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Instalar dependencias de la API y ML
+RUN pip install fastapi uvicorn pandas scikit-learn joblib pydantic requests
+# Copiar el código de la API
+COPY src/app.py /app/app.py
+
+# Exponer el puerto de FastAPI
+EXPOSE 8000
+
+# Levantar el servidor Uvicorn
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
