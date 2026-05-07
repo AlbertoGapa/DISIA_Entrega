@@ -3,7 +3,8 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Instalar dependencias de la API y ML
-RUN pip install fastapi uvicorn pandas scikit-learn joblib pydantic requests
+RUN pip install fastapi uvicorn pandas scikit-learn joblib pydantic requests prometheus-fastapi-instrumentator
+
 # Copiar el código de la API
 COPY src/app.py /app/app.py
 

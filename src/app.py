@@ -5,12 +5,19 @@ import pandas as pd
 import numpy as np
 import requests
 import os
+import csv
+from datetime import date
+from typing import Optional
+from prometheus_fastapi_instrumentator import Instrumentator
 
 app = FastAPI(
     title="API VITIS-IA Producción",
     description="Sistema inteligente de predicción agronómica y prescripción de riego para viñedos.",
-    version="1.1.0"
+    version="1.2.0"
 )
+
+# Inicialización de métricas operativas para Prometheus
+Instrumentator().instrument(app).expose(app)
 
 # CARGA DE MODELOS 
 try:
@@ -41,7 +48,56 @@ class DatosRiego(BaseModel):
     variedad: str
     soil_moisture: float = Field(..., description="Humedad actual del suelo en %")
     codigo_municipio: str = Field("02039", description="Código AEMET de Higueruela, Albacete")
-   
+
+class DatosEstacion(BaseModel):
+    fecha: Optional[date] = None
+    temp: float
+    humedad: float
+    lluvia: float
+
+class DatosMadurezReal(BaseModel):
+    fecha: Optional[date] = None
+    variedad: str
+    brix: float
+    acidez: float
+    madurez_real: float
+
+class DatosPlagaReal(BaseModel):
+    fecha: Optional[date] = None
+    Humidity: float
+    Soil_Moisture: float
+    Nitrogen_Level: float
+    Ambient_Temperature: float
+    salud_real: str
+
+
+# FUNCIONES AUXILIARES 
+def enviar_alerta_telegram(mensaje):
+    """Envía notificaciones de alerta utilizando la API de Telegram."""
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        print("[Aviso] Credenciales de Telegram no configuradas.")
+        return
+    
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        requests.post(url, json={"chat_id": chat_id, "text": mensaje}, timeout=5)
+    except Exception as e:
+        print(f"Error en el servicio de alertas: {e}")
+
+def guardar_en_csv(registro: dict, nombre_archivo: str):
+    """Almacena registros de entrada en archivos CSV para el feedback loop."""
+    os.makedirs('data', exist_ok=True)
+    ruta = f'data/{nombre_archivo}'
+    archivo_existe = os.path.isfile(ruta)
+    
+    with open(ruta, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=registro.keys())
+        if not archivo_existe or os.stat(ruta).st_size == 0:
+            writer.writeheader()
+        writer.writerow(registro)
+
 
 # ENDPOINTS
 @app.get("/health")
@@ -106,7 +162,6 @@ def recommend_irrigation(datos: DatosRiego):
     prob_lluvia = 0
     temp_max = 25.0
     aemet_status = "ok"
-
 
     api_key_secreta = os.getenv("AEMET_API_KEY")
 
@@ -184,3 +239,93 @@ def recommend_irrigation(datos: DatosRiego):
             "agronomic_reasoning": motivo
         }
     }
+
+
+# ENDPOINTS MLOPS
+@app.post("/estacion/clima", tags=["MLOps"])
+async def registrar_clima_estacion(datos: DatosEstacion):
+    fecha_final = datos.fecha if datos.fecha else date.today()
+    registro = {
+        "fecha": fecha_final.isoformat(),
+        "temp": datos.temp,
+        "humedad": datos.humedad,
+        "lluvia": datos.lluvia,
+    }
+    guardar_en_csv(registro, 'buffer_reentrenamiento.csv')
+    
+    if datos.temp > 45.0:
+        enviar_alerta_telegram(f"Alerta de Sistema: Temperatura extrema detectada ({datos.temp}ºC).")
+    
+    return {"status": "success", "data_logged": registro}
+
+@app.post("/madurez/registrar_real", tags=["MLOps"])
+async def registrar_madurez_real(datos: DatosMadurezReal):
+    fecha_registro = datos.fecha if datos.fecha else date.today()
+    error_ia = 0.0
+    
+    input_dict = {col: 0 for col in columnas_maturity}
+    input_dict['Total acidity (g/l TA)'] = datos.acidez
+    input_dict['Brix'] = datos.brix
+    col_var = f"Variedad_{datos.variedad}"
+    if col_var in input_dict: input_dict[col_var] = 1
+    
+    try:
+        df_input = pd.DataFrame([input_dict])[columnas_maturity]
+        pred_ia = modelo_maturity.predict(df_input)[0]
+        error_ia = abs(pred_ia - datos.madurez_real)
+        if error_ia > 15.0:
+            enviar_alerta_telegram(f"Alerta de Modelo: Desviación crítica en madurez ({round(error_ia, 2)}%). Variedad: {datos.variedad}.")
+    except Exception:
+        pass
+
+    registro = {
+        "fecha": fecha_registro.isoformat(),
+        "Variedad": datos.variedad,
+        "Brix": datos.brix,
+        "Total acidity (g/l TA)": datos.acidez,
+        "Maturity percentage": datos.madurez_real,
+        "error_ia": round(error_ia, 2)
+    }
+    guardar_en_csv(registro, 'reentrenamiento_madurez.csv')
+    return {"status": "success", "feedback": {"error_detectado": round(error_ia, 2)}}
+
+@app.post("/plagas/registrar_real", tags=["MLOps"])
+async def registrar_plaga_real(datos: DatosPlagaReal):
+    fecha_registro = datos.fecha if datos.fecha else date.today()
+    alerta_estado = "OK"
+    
+    try:
+        if modelo_plagas is not None:
+            input_df = pd.DataFrame([{
+                "Humidity": datos.Humidity, "Soil_Moisture": datos.Soil_Moisture,
+                "Nitrogen_Level": datos.Nitrogen_Level, "Ambient_Temperature": datos.Ambient_Temperature
+            }])
+            pred_num = modelo_plagas.predict(input_df)[0]
+            mapa_inverso = {0: 'Healthy', 1: 'Moderate Stress', 2: 'High Stress'}
+            pred_ia = mapa_inverso.get(pred_num, 'Unknown')
+            
+            if pred_ia != datos.salud_real:
+                alerta_estado = f"Fallo: Predicho {pred_ia} vs Real {datos.salud_real}"
+                enviar_alerta_telegram(f"Alerta de Modelo: Error en clasificación fitosanitaria. {alerta_estado}")
+    except Exception:
+        pass
+
+    registro = {
+        "fecha": fecha_registro.isoformat(),
+        "Humidity": datos.Humidity, "Soil_Moisture": datos.Soil_Moisture,
+        "Nitrogen_Level": datos.Nitrogen_Level, "Ambient_Temperature": datos.Ambient_Temperature,
+        "salud_real": datos.salud_real
+    }
+    guardar_en_csv(registro, 'reentrenamiento_plagas.csv')
+    return {"status": "success", "feedback": alerta_estado}
+
+@app.post("/admin/recargar_modelos", tags=["MLOps"])
+def recargar_modelos_en_caliente():
+    global modelo_plagas, modelo_maturity, columnas_maturity
+    try:
+        modelo_plagas = joblib.load('models/modelo_plagas.pkl')
+        modelo_maturity = joblib.load('models/modelo_maturity.pkl')
+        columnas_maturity = joblib.load('models/columnas_maturity.pkl')
+        return {"status": "success", "message": "Modelos actualizados correctamente en memoria."}
+    except Exception as e:
+        return {"status": "error", "message": f"Fallo al recargar modelos: {e}"}

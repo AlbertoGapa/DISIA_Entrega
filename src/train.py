@@ -14,8 +14,8 @@ print("Iniciando Pipeline de Entrenamiento para VITIS-IA\n")
 # Crear carpeta para modelos
 os.makedirs('models', exist_ok=True)
 
-# CARGA DE DATOS CORREGIDA (UVAS)
 try:
+    # CARGA DE MADUREZ (Excel + Feedback)
     xls = pd.ExcelFile('data/grape-maturity-dataset.xlsx')
     lista_dfs = []
     for nombre_hoja in xls.sheet_names:
@@ -25,10 +25,20 @@ try:
     
     df_uvas = pd.concat(lista_dfs, ignore_index=True)
     df_uvas = df_uvas.dropna(subset=['Maturity percentage', 'Brix', 'Total acidity (g/l TA)'])
-    print(f"✓ Datos de maduración cargados. Variedades: {df_uvas['Variedad'].unique()}")
+    
+    if os.path.exists('data/reentrenamiento_madurez.csv'):
+        df_feedback_m = pd.read_csv('data/reentrenamiento_madurez.csv')
+        df_uvas = pd.concat([df_uvas, df_feedback_m], ignore_index=True)
+        print(f"Feedback loop aplicado: {len(df_feedback_m)} registros nuevos de maduración.")
 
+    # CARGA DE PLAGAS (CSV + Feedback)
     df_rosales = pd.read_csv('data/plant_health_data.csv')
-    print("✓ Datos fitosanitarios cargados")
+    if os.path.exists('data/reentrenamiento_plagas.csv'):
+        df_feedback_p = pd.read_csv('data/reentrenamiento_plagas.csv')
+        df_feedback_p = df_feedback_p.rename(columns={'salud_real': 'Plant_Health_Status'})
+        df_rosales = pd.concat([df_rosales, df_feedback_p], ignore_index=True)
+        print(f"Feedback loop aplicado: {len(df_feedback_p)} registros nuevos fitosanitarios.")
+
 except Exception as e:
     print(f"Error crítico cargando datos: {e}")
     exit()
@@ -45,7 +55,7 @@ rf_reg.fit(X_train_r, y_train_r)
 
 joblib.dump(rf_reg, 'models/modelo_maturity.pkl')
 joblib.dump(list(X_reg.columns), 'models/columnas_maturity.pkl')
-print("✓ Modelo de Maduración guardado")
+print("Modelo de Maduración guardado")
 
 # ENTRENAMIENTO SALUD (CLASIFICACIÓN)
 df_rosales['Plant_Health_Status'] = df_rosales['Plant_Health_Status'].str.strip().str.title()
@@ -61,7 +71,7 @@ rf_clf = RandomForestClassifier(n_estimators=100, max_depth=10, class_weight='ba
 rf_clf.fit(X_train_c, y_train_c)
 
 joblib.dump(rf_clf, 'models/modelo_plagas.pkl')
-print("✓ Modelo de Plagas guardado")
+print("Modelo de Plagas guardado")
 
 # CÁLCULO DE MÉTRICAS 
 rmse = np.sqrt(mean_squared_error(y_test_r, rf_reg.predict(X_test_r)))

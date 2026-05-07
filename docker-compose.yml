@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile.train
     volumes:
-      - ./data:/app/data        # Mapea los excels locales al contenedor
+      - ./data:/app/data        # Mapea los excels y CSV de feedback
       - ./models:/app/models    # Aquí se guardarán los .pkl
     container_name: vitis_trainer
 
@@ -20,9 +20,27 @@ services:
       - "8000:8000"
     volumes:
       - ./models:/app/models
+      - ./data:/app/data        
     env_file:             
       - .env    
     depends_on:
       trainer:
-        condition: service_completed_successfully # Espera a que termine de entrenar
+        condition: service_completed_successfully
     container_name: vitis_api
+
+  # Observabilidad
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    container_name: vitis_prometheus
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    container_name: vitis_grafana
