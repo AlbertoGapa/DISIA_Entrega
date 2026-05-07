@@ -9,6 +9,7 @@ import csv
 from datetime import date
 from typing import Optional
 from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter, Gauge, Histogram
 
 app = FastAPI(
     title="API VITIS-IA Producción",
@@ -18,6 +19,12 @@ app = FastAPI(
 
 # Inicialización de métricas operativas para Prometheus
 Instrumentator().instrument(app).expose(app)
+# 1. Contador de predicciones realizadas
+PREDICCIONES_TOTALES = Counter('vitis_ia_predictions_total', 'Total de predicciones realizadas', ['tipo_modelo'])
+ERROR_MADUREZ_ACTUAL = Gauge('vitis_ia_madurez_error_pct', 'Error porcentual de la última validación de madurez')
+DISTRIBUCION_MADUREZ = Histogram('vitis_ia_madurez_predicha_values', 'Distribución de los valores de madurez predichos', buckets=[0, 25, 50, 75, 90, 100])
+PLAGAS_PREDICCIONES = Counter('vitis_ia_plagas_total', 'Total de predicciones de salud de rosales', ['estado_predicho'])
+ERROR_PLAGAS_TOTAL = Counter('vitis_ia_plagas_errores_total', 'Total de veces que la IA falló comparado con la realidad')
 
 # CARGA DE MODELOS 
 try:
@@ -118,6 +125,8 @@ def predict_plagas(datos: DatosPlaga):
     pred = int(modelo_plagas.predict(df_input)[0])
     
     mapeo = {0: "Healthy", 1: "Moderate Stress", 2: "High Stress"}
+    
+    PLAGAS_PREDICCIONES.labels(estado_predicho=estado).inc()
     return {"status": "success", "result": mapeo[pred]}
 
 @app.post("/predict_maturity")
@@ -134,6 +143,8 @@ def predict_maturity(datos: DatosMaturity):
     df_input = pd.DataFrame([input_dict])[columnas_maturity]
     pred = float(modelo_maturity.predict(df_input)[0])
     
+    PREDICCIONES_TOTALES.labels(tipo_modelo='madurez').inc() 
+    DISTRIBUCION_MADUREZ.observe(pred) 
     return {
         "status": "success",
         "data": {
@@ -287,6 +298,7 @@ async def registrar_madurez_real(datos: DatosMadurezReal):
         "error_ia": round(error_ia, 2)
     }
     guardar_en_csv(registro, 'reentrenamiento_madurez.csv')
+    ERROR_MADUREZ_ACTUAL.set(error_ia) 
     return {"status": "success", "feedback": {"error_detectado": round(error_ia, 2)}}
 
 @app.post("/plagas/registrar_real", tags=["MLOps"])
@@ -317,6 +329,12 @@ async def registrar_plaga_real(datos: DatosPlagaReal):
         "salud_real": datos.salud_real
     }
     guardar_en_csv(registro, 'reentrenamiento_plagas.csv')
+    
+    if pred_ia != datos.salud_real:
+
+        ERROR_PLAGAS_TOTAL.inc()
+        enviar_alerta_telegram(f"🚨 Error de Clasificación: IA dijo {pred_ia} pero la realidad es {datos.salud_real}")
+    
     return {"status": "success", "feedback": alerta_estado}
 
 @app.post("/admin/recargar_modelos", tags=["MLOps"])
