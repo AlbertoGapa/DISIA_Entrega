@@ -1,3 +1,5 @@
 .env
 /data
 /venv_vitis
+/models/history
+/models/registro_entrenamiento.txt

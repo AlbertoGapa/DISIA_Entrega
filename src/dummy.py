@@ -18,7 +18,6 @@ def inyectar_temporada_desde_csv():
     for _, row in df.iterrows():
         fecha = row['fecha']
         
-        # Enviar Clima
         payload_clima = {
             "fecha": fecha,
             "temp": row['temp'],
@@ -28,18 +27,23 @@ def inyectar_temporada_desde_csv():
         r_clima = requests.post(f"{BASE_URL}/estacion/clima", json=payload_clima)
         print(f"[{fecha}] Clima -> T: {row['temp']}ºC | HTTP {r_clima.status_code}")
 
-        # Enviar Plagas
         payload_plagas = {
             "fecha": fecha,
-            "Humidity": row['humedad'],
-            "Soil_Moisture": round(row['humedad'] * 0.8, 2), # Aproximación
-            "Nitrogen_Level": 40.0,
             "Ambient_Temperature": row['temp'],
+            "Humidity": row['humedad'],
+            "Soil_Moisture": row['Soil_Moisture'],
+            "Soil_Temperature": row['Soil_Temperature'],
+            "Light_Intensity": row['Light_Intensity'],
+            "Soil_pH": row['Soil_pH'],
+            "Nitrogen_Level": row['Nitrogen_Level'],
+            "Phosphorus_Level": row['Phosphorus_Level'],
+            "Potassium_Level": row['Potassium_Level'],
+            "Chlorophyll_Content": row['Chlorophyll_Content'],
+            "Electrochemical_Signal": row['Electrochemical_Signal'],
             "salud_real": row['salud_real']
         }
         r_plagas = requests.post(f"{BASE_URL}/plagas/registrar_real", json=payload_plagas)
 
-        # Enviar Madurez
         if not math.isnan(row['brix']):
             payload_madurez = {
                 "fecha": fecha,
@@ -50,14 +54,11 @@ def inyectar_temporada_desde_csv():
             }
             r_mad = requests.post(f"{BASE_URL}/madurez/registrar_real", json=payload_madurez)
             
-            # Ver si el modelo se ha equivocado 
             if r_mad.status_code == 200:
-                alerta = r_mad.json().get("feedback_metrics", {}).get("alerta", "")
-                estado = f"{alerta}" if "Crítico" in alerta else "OK"
-                print(f"Madurez ({row['brix']} Brix) -> {estado}")
+                print(f"Madurez ({row['brix']} Brix) -> Registrada OK")
 
-        # Retardo para que las métricas de Prometheus / FastAPI sean realistas
-        time.sleep(0.15) 
+        # Retardo para no colapsar la API
+        time.sleep(0.5) 
 
     print("Inyección completada")
 

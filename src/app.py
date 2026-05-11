@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 import joblib
 import pandas as pd
@@ -11,6 +13,7 @@ from typing import Optional
 from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_client import Counter, Gauge, Histogram
 
+
 app = FastAPI(
     title="API VITIS-IA Producción",
     description="Sistema inteligente de predicción agronómica y prescripción de riego para viñedos.",
@@ -19,12 +22,22 @@ app = FastAPI(
 
 # Inicialización de métricas operativas para Prometheus
 Instrumentator().instrument(app).expose(app)
-# 1. Contador de predicciones realizadas
+
 PREDICCIONES_TOTALES = Counter('vitis_ia_predictions_total', 'Total de predicciones realizadas', ['tipo_modelo'])
 ERROR_MADUREZ_ACTUAL = Gauge('vitis_ia_madurez_error_pct', 'Error porcentual de la última validación de madurez')
 DISTRIBUCION_MADUREZ = Histogram('vitis_ia_madurez_predicha_values', 'Distribución de los valores de madurez predichos', buckets=[0, 25, 50, 75, 90, 100])
-PLAGAS_PREDICCIONES = Counter('vitis_ia_plagas_total', 'Total de predicciones de salud de rosales', ['estado_predicho'])
+PLAGAS_PREDICCIONES = Gauge('vitis_ia_plagas_predicciones', 'Total de predicciones de salud de rosales', ['estado_predicho'])
+SALUD_REAL_VALOR = Gauge('vitis_ia_plagas_real', 'Último estado de salud real por el laboratorio')
 ERROR_PLAGAS_TOTAL = Counter('vitis_ia_plagas_errores_total', 'Total de veces que la IA falló comparado con la realidad')
+AEMET_LLUVIA_PROB = Gauge('vitis_ia_aemet_lluvia_prob', 'Probabilidad de lluvia actual obtenida de AEMET')
+MADUREZ_PREDICHA_ACTUAL = Gauge('vitis_ia_madurez_predicha', 'Último porcentaje de madurez predicho por el modelo')
+MADUREZ_REAL_ACTUAL = Gauge('vitis_ia_madurez_real', 'Último porcentaje de madurez real por el laboratorio')
+ESTACION_LLUVIA = Gauge('vitis_ia_estacion_lluvia_mm', 'Lluvia real registrada por la estación en el viñedo (mm)')
+AEMET_LLUVIA_PREVISTA_MM = Gauge('vitis_ia_aemet_lluvia_prevista_mm', 'Cantidad de lluvia prevista por AEMET (mm)')
+AEMET_TEMP_MAX = Gauge('vitis_ia_aemet_temp_max', 'Temperatura máxima prevista por AEMET')
+ESTACION_TEMP = Gauge('vitis_ia_estacion_temp', 'Temperatura real medida en la finca')
+ESTACION_HUMEDAD = Gauge('vitis_ia_estacion_humedad', 'Humedad real medida en la finca')
+
 
 # CARGA DE MODELOS 
 try:
@@ -38,21 +51,28 @@ except Exception as e:
 
 
 # ESQUEMAS DE VALIDACIÓN
-class DatosPlaga(BaseModel):
-    Humidity: float = Field(..., ge=0, le=100)
-    Soil_Moisture: float = Field(..., ge=0, le=100)
-    Nitrogen_Level: float = Field(..., ge=0)
-    Ambient_Temperature: float = Field(25.0)
+class DatosPrediccionPlaga(BaseModel):
+    Soil_Moisture: float = Field(default=0.0)
+    Ambient_Temperature: float = Field(default=0.0)
+    Soil_Temperature: float = Field(default=22.0)
+    Humidity: float = Field(default=0.0)
+    Light_Intensity: float = Field(default=4000.0)
+    Soil_pH: float = Field(default=6.5)
+    Nitrogen_Level: float = Field(default=0.0)
+    Phosphorus_Level: float = Field(default=20.0)
+    Potassium_Level: float = Field(default=30.0)
+    Chlorophyll_Content: float = Field(default=45.0)
+    Electrochemical_Signal: float = Field(default=15.0)
 
 class DatosMaturity(BaseModel):
     acidity: float = Field(..., gt=0)
     brix: float = Field(..., ge=0)
-    variedad: str = Field(..., description="Xinomavro, Syrah o Sauvignon Blanc")
+    variedad: str = Field("Syrah", description="Xinomavro, Syrah o Sauvignon Blanc")
 
 class DatosRiego(BaseModel):
     acidity: float
     brix: float
-    variedad: str
+    variedad: str = Field("Syrah")
     soil_moisture: float = Field(..., description="Humedad actual del suelo en %")
     codigo_municipio: str = Field("02039", description="Código AEMET de Higueruela, Albacete")
 
@@ -60,7 +80,7 @@ class DatosEstacion(BaseModel):
     fecha: Optional[date] = None
     temp: float
     humedad: float
-    lluvia: float
+    lluvia: float = Field(0.0, description="Litros por metro cuadrado (mm) caídos")
 
 class DatosMadurezReal(BaseModel):
     fecha: Optional[date] = None
@@ -70,12 +90,19 @@ class DatosMadurezReal(BaseModel):
     madurez_real: float
 
 class DatosPlagaReal(BaseModel):
+    salud_real: str = Field(..., description="Healthy, Moderate Stress o High Stress")
     fecha: Optional[date] = None
-    Humidity: float
-    Soil_Moisture: float
-    Nitrogen_Level: float
-    Ambient_Temperature: float
-    salud_real: str
+    Soil_Moisture: float = Field(default=0.0)
+    Ambient_Temperature: float = Field(default=0.0)
+    Soil_Temperature: float = Field(default=22.0)
+    Humidity: float = Field(default=0.0)
+    Light_Intensity: float = Field(default=4000.0)
+    Soil_pH: float = Field(default=6.5)
+    Nitrogen_Level: float = Field(default=0.0)
+    Phosphorus_Level: float = Field(default=20.0)
+    Potassium_Level: float = Field(default=30.0)
+    Chlorophyll_Content: float = Field(default=45.0)
+    Electrochemical_Signal: float = Field(default=15.0)
 
 
 # FUNCIONES AUXILIARES 
@@ -113,21 +140,34 @@ def health():
         return {"status": "healthy", "ready": True}
     return {"status": "unhealthy", "ready": False}
 
-@app.post("/predict_plagas")
-def predict_plagas(datos: DatosPlaga):
-    if not modelo_plagas: raise HTTPException(status_code=503, detail="Modelo no disponible")
-    
-    cols_modelo = modelo_plagas.feature_names_in_
-    input_dict = {col: 50.0 for col in cols_modelo}
-    input_dict.update(datos.dict())
-    
-    df_input = pd.DataFrame([input_dict])[cols_modelo]
-    pred = int(modelo_plagas.predict(df_input)[0])
-    
-    mapeo = {0: "Healthy", 1: "Moderate Stress", 2: "High Stress"}
-    
-    PLAGAS_PREDICCIONES.labels(estado_predicho=estado).inc()
-    return {"status": "success", "result": mapeo[pred]}
+@app.post("/predict_plaga", tags=["Inferencia"])
+def predict_plaga(datos: DatosPrediccionPlaga):
+    if modelo_plagas is None:
+        raise HTTPException(status_code=503, detail="Modelo de plagas no cargado")
+
+    try:
+
+        cols_modelo = list(modelo_plagas.feature_names_in_)
+        datos_dict = datos.model_dump()
+        input_dict = {col: datos_dict.get(col, 0.0) for col in cols_modelo}
+        df_input = pd.DataFrame([input_dict], columns=cols_modelo)
+        pred_num = int(modelo_plagas.predict(df_input)[0])
+        
+        mapa_inverso = {0: 'Healthy', 1: 'Moderate Stress', 2: 'High Stress'}
+        resultado = mapa_inverso.get(pred_num, 'Unknown')
+        PREDICCIONES_TOTALES.labels(tipo_modelo='plagas').inc()
+        PLAGAS_PREDICCIONES.set(mapa_inverso.get(resultado, -1))
+
+        return {
+            "status": "success",
+            "prediction": resultado,
+            "prediction_code": pred_num,
+            "monitored_sensors": len(input_dict)
+        }
+
+    except Exception as e:
+        print(f"🚨 Error en predict_plaga: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en el motor de inferencia: {str(e)}")
 
 @app.post("/predict_maturity")
 def predict_maturity(datos: DatosMaturity):
@@ -145,6 +185,7 @@ def predict_maturity(datos: DatosMaturity):
     
     PREDICCIONES_TOTALES.labels(tipo_modelo='madurez').inc() 
     DISTRIBUCION_MADUREZ.observe(pred) 
+    MADUREZ_PREDICHA_ACTUAL.set(pred)
     return {
         "status": "success",
         "data": {
@@ -179,30 +220,49 @@ def recommend_irrigation(datos: DatosRiego):
     if not api_key_secreta:
         aemet_status = "Aviso: API Key de AEMET no configurada en el servidor."
     else:
-        try:
-            url_aemet = f"https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/{datos.codigo_municipio}"
-            params = {"api_key": api_key_secreta} 
-            headers = {'cache-control': "no-cache"}
+        prob_lluvia = 0.0
+    mm_lluvia_prevista = 0.0
+    estado_aemet = "OK"
+    
+    try:
+        api_key = os.getenv("AEMET_API_KEY")
+        url = f"https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/horaria/{datos.codigo_municipio}/?api_key={api_key}"
+        
+        respuesta = requests.get(url, timeout=5)
+        
+        if respuesta.status_code == 200:
+            datos_url = respuesta.json().get("datos")
+            if datos_url:
+                respuesta_datos = requests.get(datos_url, timeout=5)
+                datos_tiempo = respuesta_datos.json()
+                
+                # Obtenemos los datos del día de HOY
+                dia_hoy = datos_tiempo[0]['prediccion']['dia'][0]
+                
+                # TOTAL DE LLUVIA HOY
+                for precipitacion in dia_hoy.get('precipitacion', []):
+                    mm_str = precipitacion.get('value')
+                    # 'Ip' es Inapreciable
+                    if mm_str and mm_str != 'Ip':
+                        mm_lluvia_prevista += float(mm_str)
+                        
+                # PROBABILIDAD MÁXIMA DE HOY
+                for prob in dia_hoy.get('probPrecipitacion', []):
+                    prob_str = prob.get('value')
+                    if prob_str:
+                        prob_lluvia = max(prob_lluvia, float(prob_str))
 
-            # Primera llamada para obtener el enlace de descarga de datos
-            res_link = requests.get(url_aemet, headers=headers, params=params, timeout=5)
-            if res_link.status_code == 200:
-                datos_url = res_link.json().get("datos")
-                
-                # Segunda llamada para bajar el JSON con el clima real
-                res_datos = requests.get(datos_url, timeout=5)
-                clima_json = res_datos.json()
-                
-                # Extraemos los datos de "hoy" 
-                hoy = clima_json[0]['prediccion']['dia'][0]
-                
-                val_lluvia = hoy['probPrecipitacion'][0].get('value', '0')
-                prob_lluvia = int(val_lluvia) if val_lluvia else 0
-                temp_max = float(hoy['temperatura']['maxima'])
-            else:
-                aemet_status = f"Error auth/AEMET devuelve código {res_link.status_code}"
-        except Exception as e:
-            aemet_status = f"Fallo de conexión externa: {str(e)}"
+        elif respuesta.status_code == 429:
+            estado_aemet = "Límite AEMET 429. Usando fallback (0mm, 0%)."
+        else:
+            estado_aemet = f"Error AEMET: {respuesta.status_code}"
+            
+    except Exception as e:
+        estado_aemet = f"Fallo conexión AEMET: {str(e)}"
+
+    AEMET_LLUVIA_PROB.set(prob_lluvia)
+    AEMET_LLUVIA_PREVISTA_MM.set(mm_lluvia_prevista)
+    AEMET_TEMP_MAX.set(temp_max)
 
     # MOTOR DE PRESCRIPCIÓN AGRONÓMICA
     recomendacion = ""
@@ -255,6 +315,11 @@ def recommend_irrigation(datos: DatosRiego):
 # ENDPOINTS MLOPS
 @app.post("/estacion/clima", tags=["MLOps"])
 async def registrar_clima_estacion(datos: DatosEstacion):
+    
+    ESTACION_LLUVIA.set(datos.lluvia)
+    ESTACION_TEMP.set(datos.temp)
+    ESTACION_HUMEDAD.set(datos.humedad)
+    
     fecha_final = datos.fecha if datos.fecha else date.today()
     registro = {
         "fecha": fecha_final.isoformat(),
@@ -266,6 +331,7 @@ async def registrar_clima_estacion(datos: DatosEstacion):
     
     if datos.temp > 45.0:
         enviar_alerta_telegram(f"Alerta de Sistema: Temperatura extrema detectada ({datos.temp}ºC).")
+    
     
     return {"status": "success", "data_logged": registro}
 
@@ -283,7 +349,7 @@ async def registrar_madurez_real(datos: DatosMadurezReal):
     try:
         df_input = pd.DataFrame([input_dict])[columnas_maturity]
         pred_ia = modelo_maturity.predict(df_input)[0]
-        error_ia = abs(pred_ia - datos.madurez_real)
+        error_ia = round(abs(pred_ia - datos.madurez_real), 2)
         if error_ia > 15.0:
             enviar_alerta_telegram(f"Alerta de Modelo: Desviación crítica en madurez ({round(error_ia, 2)}%). Variedad: {datos.variedad}.")
     except Exception:
@@ -298,44 +364,69 @@ async def registrar_madurez_real(datos: DatosMadurezReal):
         "error_ia": round(error_ia, 2)
     }
     guardar_en_csv(registro, 'reentrenamiento_madurez.csv')
+    MADUREZ_REAL_ACTUAL.set(datos.madurez_real) 
     ERROR_MADUREZ_ACTUAL.set(error_ia) 
+    MADUREZ_PREDICHA_ACTUAL.set(pred_ia)
+    
     return {"status": "success", "feedback": {"error_detectado": round(error_ia, 2)}}
 
 @app.post("/plagas/registrar_real", tags=["MLOps"])
-async def registrar_plaga_real(datos: DatosPlagaReal):
+def registrar_plaga_real(datos: DatosPlagaReal):
     fecha_registro = datos.fecha if datos.fecha else date.today()
     alerta_estado = "OK"
+    pred_ia = "Unknown"
+    mapeo_grafana = {'Healthy': 0, 'Moderate Stress': 1, 'High Stress': 2}
     
     try:
         if modelo_plagas is not None:
-            input_df = pd.DataFrame([{
-                "Humidity": datos.Humidity, "Soil_Moisture": datos.Soil_Moisture,
-                "Nitrogen_Level": datos.Nitrogen_Level, "Ambient_Temperature": datos.Ambient_Temperature
-            }])
-            pred_num = modelo_plagas.predict(input_df)[0]
+
+            cols_modelo = list(modelo_plagas.feature_names_in_)
+            datos_dict = datos.model_dump()
+            input_dict = {col: datos_dict.get(col, 0.0) for col in cols_modelo}
+            df_input = pd.DataFrame([input_dict], columns=cols_modelo)
+            
+            # Predicción
+            pred_num = int(modelo_plagas.predict(df_input)[0])
             mapa_inverso = {0: 'Healthy', 1: 'Moderate Stress', 2: 'High Stress'}
             pred_ia = mapa_inverso.get(pred_num, 'Unknown')
             
-            if pred_ia != datos.salud_real:
-                alerta_estado = f"Fallo: Predicho {pred_ia} vs Real {datos.salud_real}"
-                enviar_alerta_telegram(f"Alerta de Modelo: Error en clasificación fitosanitaria. {alerta_estado}")
-    except Exception:
-        pass
+            PLAGAS_PREDICCIONES.set(mapeo_grafana.get(pred_ia, -1))
 
+    except Exception as e:
+        print(f"Error crítico en inferencia plagas: {e}")
+        alerta_estado = f"Error técnico: {str(e)}"
+
+    # Persistencia en CSV
     registro = {
-        "fecha": fecha_registro.isoformat(),
-        "Humidity": datos.Humidity, "Soil_Moisture": datos.Soil_Moisture,
-        "Nitrogen_Level": datos.Nitrogen_Level, "Ambient_Temperature": datos.Ambient_Temperature,
-        "salud_real": datos.salud_real
+        "Timestamp": fecha_registro.isoformat(),
+        "Plant_ID": "Feedback_IoT_01", 
+        "Soil_Moisture": datos.Soil_Moisture,
+        "Ambient_Temperature": datos.Ambient_Temperature,
+        "Soil_Temperature": datos.Soil_Temperature,
+        "Humidity": datos.Humidity,
+        "Light_Intensity": datos.Light_Intensity,
+        "Soil_pH": datos.Soil_pH,
+        "Nitrogen_Level": datos.Nitrogen_Level,
+        "Phosphorus_Level": datos.Phosphorus_Level,
+        "Potassium_Level": datos.Potassium_Level,
+        "Chlorophyll_Content": datos.Chlorophyll_Content,
+        "Electrochemical_Signal": datos.Electrochemical_Signal,
+        "Plant_Health_Status": datos.salud_real
     }
+    
     guardar_en_csv(registro, 'reentrenamiento_plagas.csv')
     
-    if pred_ia != datos.salud_real:
+    # Alertas y Métricas
+    if pred_ia != "Unknown" and pred_ia != datos.salud_real:
 
-        ERROR_PLAGAS_TOTAL.inc()
-        enviar_alerta_telegram(f"🚨 Error de Clasificación: IA dijo {pred_ia} pero la realidad es {datos.salud_real}")
+        ERROR_PLAGAS_TOTAL.inc() 
+        alerta_estado = f"Fallo IA: Predicho {pred_ia} vs Real {datos.salud_real}"
+        enviar_alerta_telegram(f"Error de Clasificación: IA dijo {pred_ia} pero la realidad es {datos.salud_real}")
     
-    return {"status": "success", "feedback": alerta_estado}
+    
+    SALUD_REAL_VALOR.set(mapeo_grafana.get(datos.salud_real, -1))
+
+    return {"status": "success", "feedback": alerta_estado, "ia_prediction": pred_ia}
 
 @app.post("/admin/recargar_modelos", tags=["MLOps"])
 def recargar_modelos_en_caliente():
@@ -347,3 +438,23 @@ def recargar_modelos_en_caliente():
         return {"status": "success", "message": "Modelos actualizados correctamente en memoria."}
     except Exception as e:
         return {"status": "error", "message": f"Fallo al recargar modelos: {e}"}
+
+# Alerta Excepciones 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    mensaje_error = f"ALERTA OPERATIVA: Error 500 en {request.url.path}. Detalle: {str(exc)}"
+    enviar_alerta_telegram(mensaje_error) 
+    
+    return JSONResponse(
+        status_code=500,
+        content={"message": "Error interno del servidor", "detail": str(exc)},
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    mensaje = f"ALERTA OPERATIVA: Datos mal formados en {request.url.path}. Errores: {exc.errors()}"
+    enviar_alerta_telegram(mensaje) 
+    return JSONResponse(
+        status_code=422,
+        content={"message": "Error de validación de datos", "detail": exc.errors()},
+    )

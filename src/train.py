@@ -6,12 +6,15 @@ import warnings
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import f1_score, mean_squared_error
+from datetime import datetime
 
 warnings.filterwarnings("ignore")
 
 print("Iniciando Pipeline de Entrenamiento para VITIS-IA\n")
 
 # Crear carpeta para modelos
+timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+os.makedirs('models/history', exist_ok=True)
 os.makedirs('models', exist_ok=True)
 
 try:
@@ -53,9 +56,16 @@ X_train_r, X_test_r, y_train_r, y_test_r = train_test_split(X_reg, y_reg, test_s
 rf_reg = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
 rf_reg.fit(X_train_r, y_train_r)
 
-joblib.dump(rf_reg, 'models/modelo_maturity.pkl')
-joblib.dump(list(X_reg.columns), 'models/columnas_maturity.pkl')
-print("Modelo de Maduración guardado")
+nombre_modelo_mat = 'modelo_maturity.pkl'
+nombre_modelo_pla = 'modelo_plagas.pkl'
+ruta_actual_mat = os.path.join('models', nombre_modelo_mat)
+ruta_actual_pla = os.path.join('models', nombre_modelo_pla)
+ruta_historial_mat = os.path.join('models/history', f'modelo_maturity_{timestamp}.pkl')
+ruta_historial_pla = os.path.join('models/history', f'modelo_plague_{timestamp}.pkl')
+
+joblib.dump(rf_reg, ruta_actual_mat)
+joblib.dump(rf_reg, ruta_historial_mat)
+print(f"Modelo de Maduración versionado y guardado: {ruta_historial_mat}")
 
 # ENTRENAMIENTO SALUD (CLASIFICACIÓN)
 df_rosales['Plant_Health_Status'] = df_rosales['Plant_Health_Status'].str.strip().str.title()
@@ -70,8 +80,9 @@ X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(X_clf, y_clf, test_s
 rf_clf = RandomForestClassifier(n_estimators=100, max_depth=10, class_weight='balanced', random_state=42)
 rf_clf.fit(X_train_c, y_train_c)
 
-joblib.dump(rf_clf, 'models/modelo_plagas.pkl')
-print("Modelo de Plagas guardado")
+joblib.dump(rf_clf, ruta_actual_pla)
+joblib.dump(rf_clf, ruta_historial_pla)
+print(f"Modelo de Plagas versionado y guardado: {ruta_historial_pla}")
 
 # CÁLCULO DE MÉTRICAS 
 rmse = np.sqrt(mean_squared_error(y_test_r, rf_reg.predict(X_test_r)))
@@ -82,3 +93,9 @@ with open('models/resultado_test.txt', 'w') as f:
 
 print(f"\n✓ Resultados guardados en models/resultado_test.txt")
 print(f"F1-Score Plagas: {f1:.4f} | RMSE Maduración: {rmse:.4f}")
+
+with open('models/registro_entrenamiento.txt', 'a') as f:
+    f.write(f"\n--- Sesión: {timestamp} ---")
+    f.write(f"\nRegistros nuevos madurez : {len(df_feedback_m) if 'df_feedback_m' in locals() else 0}")
+    f.write(f"\nRegistros nuevos plagas: {len(df_feedback_p) if 'df_feedback_p' in locals() else 0}")
+    f.write(f"F1-Score Plagas: {f1:.4f} | RMSE Maduración: {rmse:.4f}")
