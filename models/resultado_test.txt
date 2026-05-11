@@ -1,2 +1,2 @@
-RMSE Maduración: 9.3734
-F1-Score Salud (Macro): 0.9887
+RMSE Maduración: 9.8496
+F1-Score Salud (Macro): 0.9927
